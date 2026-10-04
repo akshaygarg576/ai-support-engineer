@@ -165,13 +165,11 @@ def execute_tool(tool_name: str, arguments: dict) -> dict:
 # Agent loop
 # =========================================================
 
-def run_agent(user_input: str) -> str:
+def run_agent(user_input: str) -> dict:
 
     max_tool_rounds = 5
 
-    # -----------------------------------------------------
-    # Initial model decision
-    # -----------------------------------------------------
+    trace = []
 
     response = client.responses.create(
         model=deployment,
@@ -181,13 +179,7 @@ def run_agent(user_input: str) -> str:
         input=user_input,
     )
 
-    # -----------------------------------------------------
-    # Agent loop
-    # -----------------------------------------------------
-
     for tool_round in range(1, max_tool_rounds + 1):
-
-        print(f"\n--- TOOL ROUND {tool_round} ---")
 
         function_calls = [
             item
@@ -195,36 +187,37 @@ def run_agent(user_input: str) -> str:
             if item.type == "function_call"
         ]
 
-        # -------------------------------------------------
-        # STOP CONDITION:
-        # Model did not request another tool.
-        # -------------------------------------------------
-
+        # Model has stopped requesting tools.
         if not function_calls:
-            print("\n--- FINAL ANSWER ---")
-            return response.output_text
+            return {
+                "answer": response.output_text,
+                "trace": trace,
+            }
 
         tool_outputs = []
-
-        # -------------------------------------------------
-        # Execute every requested tool
-        # -------------------------------------------------
 
         for function_call in function_calls:
 
             arguments = json.loads(function_call.arguments)
-
-            print("\nTool requested:", function_call.name)
-            print("Arguments:", arguments)
 
             result = execute_tool(
                 tool_name=function_call.name,
                 arguments=arguments,
             )
 
-            print("Tool result:", result)
+            # ---------------------------------------------
+            # Record what actually happened.
+            # ---------------------------------------------
 
-            # observation
+            trace.append(
+                {
+                    "round": tool_round,
+                    "tool": function_call.name,
+                    "arguments": arguments,
+                    "result": result,
+                }
+            )
+
             tool_outputs.append(
                 {
                     "type": "function_call_output",
@@ -232,16 +225,6 @@ def run_agent(user_input: str) -> str:
                     "output": json.dumps(result),
                 }
             )
-
-        # -------------------------------------------------
-        # Give observations back to the model.
-        #
-        # previous_response_id gives the model access to
-        # the previous response chain.
-
-        # The model can decide after each observation what 
-        # information it needs next => agentic behavior
-        # -------------------------------------------------
 
         response = client.responses.create(
             model=deployment,
@@ -252,10 +235,6 @@ def run_agent(user_input: str) -> str:
             input=tool_outputs,
         )
 
-    # -----------------------------------------------------
-    # Application-controlled safety boundary
-    # -----------------------------------------------------
-
     function_calls = [
         item
         for item in response.output
@@ -263,21 +242,31 @@ def run_agent(user_input: str) -> str:
     ]
 
     if not function_calls:
-        print("\n--- FINAL ANSWER ---")
-        return response.output_text
+        return {
+            "answer": response.output_text,
+            "trace": trace,
+        }
 
     raise RuntimeError(
         f"Agent exceeded maximum tool rounds: {max_tool_rounds}"
     )
 
 
-# =========================================================
-# Run investigation
-# =========================================================
+if __name__ == "__main__":
 
-answer = run_agent(
-    "Acme says file uploads have stopped working. "
-    "Investigate the likely cause."
-)
+    result = run_agent(
+        "Acme says file uploads have stopped working. "
+        "Investigate the likely cause."
+    )
 
-print(answer)
+    print("\n--- TRACE ---")
+
+    for step in result["trace"]:
+        print(
+            f"Round {step['round']}: "
+            f"{step['tool']}({step['arguments']})"
+        )
+        print("Result:", step["result"])
+
+    print("\n--- FINAL ANSWER ---")
+    print(result["answer"])
