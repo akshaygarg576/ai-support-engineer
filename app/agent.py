@@ -4,7 +4,17 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from app.tools import get_customer
+from app.tools import (
+    get_customer,
+    get_incidents,
+    search_docs,
+    search_logs,
+)
+
+
+# =========================================================
+# Configuration
+# =========================================================
 
 load_dotenv()
 
@@ -16,6 +26,31 @@ client = OpenAI(
     api_key=api_key,
     base_url=f"{endpoint.rstrip('/')}/openai/v1/",
 )
+
+
+# =========================================================
+# Agent instructions
+# =========================================================
+
+AGENT_INSTRUCTIONS = """
+You are a support investigation assistant.
+
+Your job is to investigate customer issues using the available tools.
+
+Rules:
+- Use company tools when you need company-specific information.
+- Do not invent customer data.
+- Do not invent logs, incidents, or product behavior.
+- Treat tool results as evidence.
+- Before concluding a root cause, gather enough evidence to support it.
+- If the available evidence is insufficient, say so.
+- Stop using tools once you have enough evidence to answer.
+"""
+
+
+# =========================================================
+# Tool definitions visible to the model
+# =========================================================
 
 tools = [
     {
@@ -37,108 +72,212 @@ tools = [
             "additionalProperties": False,
         },
         "strict": True,
-    }
+    },
+    {
+        "type": "function",
+        "name": "search_logs",
+        "description": (
+            "Search recent application errors for a customer. "
+            "Use this when investigating failures or unexpected behavior."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customer_name": {
+                    "type": "string",
+                    "description": "The name of the customer.",
+                }
+            },
+            "required": ["customer_name"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "search_docs",
+        "description": (
+            "Search product documentation for product rules, "
+            "expected behavior, limits, and troubleshooting information."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "The product behavior or issue to search for."
+                    ),
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "get_incidents",
+        "description": (
+            "Get currently active service-wide incidents. "
+            "Use this to determine whether a customer problem "
+            "may be caused by a broader outage."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
-# ---------------------------------------------------------
-# Tool execution - aka "Dispatcher"
+# =========================================================
+# Tool registry
+# =========================================================
 
-# @todo: later add a "Tool Registry" when there are multiple tools, instead of if..else if
-# TOOL_REGISTRY = {
-#     "get_customer": get_customer,
-#     "search_logs": search_logs,
-#     "search_docs": search_docs,
-#     "get_incidents": get_incidents,
-# }
-# ---------------------------------------------------------
+TOOL_REGISTRY = {
+    "get_customer": get_customer,
+    "search_logs": search_logs,
+    "search_docs": search_docs,
+    "get_incidents": get_incidents,
+}
+
+
+# =========================================================
+# Deterministic tool execution
+# =========================================================
 
 def execute_tool(tool_name: str, arguments: dict) -> dict:
-    """Execute a tool requested by the model."""
+    """Execute an explicitly allowed tool."""
 
-    if tool_name == "get_customer":
-        return get_customer(
-            customer_name=arguments["customer_name"]
+    tool = TOOL_REGISTRY.get(tool_name)
+
+    if tool is None:
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+    return tool(**arguments)
+
+
+# =========================================================
+# Agent loop
+# =========================================================
+
+def run_agent(user_input: str) -> str:
+
+    max_tool_rounds = 5
+
+    # -----------------------------------------------------
+    # Initial model decision
+    # -----------------------------------------------------
+
+    response = client.responses.create(
+        model=deployment,
+        instructions=AGENT_INSTRUCTIONS,
+        tools=tools,
+        parallel_tool_calls=False,
+        input=user_input,
+    )
+
+    # -----------------------------------------------------
+    # Agent loop
+    # -----------------------------------------------------
+
+    for tool_round in range(1, max_tool_rounds + 1):
+
+        print(f"\n--- TOOL ROUND {tool_round} ---")
+
+        function_calls = [
+            item
+            for item in response.output
+            if item.type == "function_call"
+        ]
+
+        # -------------------------------------------------
+        # STOP CONDITION:
+        # Model did not request another tool.
+        # -------------------------------------------------
+
+        if not function_calls:
+            print("\n--- FINAL ANSWER ---")
+            return response.output_text
+
+        tool_outputs = []
+
+        # -------------------------------------------------
+        # Execute every requested tool
+        # -------------------------------------------------
+
+        for function_call in function_calls:
+
+            arguments = json.loads(function_call.arguments)
+
+            print("\nTool requested:", function_call.name)
+            print("Arguments:", arguments)
+
+            result = execute_tool(
+                tool_name=function_call.name,
+                arguments=arguments,
+            )
+
+            print("Tool result:", result)
+
+            # observation
+            tool_outputs.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": function_call.call_id,
+                    "output": json.dumps(result),
+                }
+            )
+
+        # -------------------------------------------------
+        # Give observations back to the model.
+        #
+        # previous_response_id gives the model access to
+        # the previous response chain.
+
+        # The model can decide after each observation what 
+        # information it needs next => agentic behavior
+        # -------------------------------------------------
+
+        response = client.responses.create(
+            model=deployment,
+            instructions=AGENT_INSTRUCTIONS,
+            tools=tools,
+            parallel_tool_calls=False,
+            previous_response_id=response.id,
+            input=tool_outputs,
         )
 
-    raise ValueError(f"Unknown tool: {tool_name}")
-
-
-response = client.responses.create(
-    model=deployment,
-    instructions=(
-        "You are a support investigation assistant. "
-        "Use available tools when you need information "
-        "from company systems. "
-        "Do not invent customer data."
-    ),
-    tools=tools,
-    input="What plan is Acme on?",
-)
-
-
-print("\n--- MODEL DECISION ---")
-
-
-tool_outputs = []
-
-for item in response.output:
-
-    if item.type != "function_call":
-        continue
-
-    arguments = json.loads(item.arguments)
-
-    print("Tool requested:", item.name)
-    print("Arguments:", arguments)
-
     # -----------------------------------------------------
-    # Our application executes the requested tool
+    # Application-controlled safety boundary
     # -----------------------------------------------------
 
-    result = execute_tool(
-        tool_name=item.name,
-        arguments=arguments,
-    )
+    function_calls = [
+        item
+        for item in response.output
+        if item.type == "function_call"
+    ]
 
-    print("Tool result:", result)
+    if not function_calls:
+        print("\n--- FINAL ANSWER ---")
+        return response.output_text
 
-    # -----------------------------------------------------
-    # Prepare the observation for the model
-    # -----------------------------------------------------
-
-    tool_outputs.append(
-        {
-            "type": "function_call_output",
-            # identifies which tool request does this tool result belong to?
-            "call_id": item.call_id,
-            "output": json.dumps(result),
-        }
-    )
-
-
-if not tool_outputs:
     raise RuntimeError(
-        "Expected the model to request a tool, but it did not."
+        f"Agent exceeded maximum tool rounds: {max_tool_rounds}"
     )
 
 
-# ---------------------------------------------------------
-# Send the tool result back to the model
-# ---------------------------------------------------------
+# =========================================================
+# Run investigation
+# =========================================================
 
-final_response = client.responses.create(
-    model=deployment,
-    # Continue from that previous model response.
-    # In other words, we are "chaining responses"
-    previous_response_id=response.id,
-    input=tool_outputs,
+answer = run_agent(
+    "Acme says file uploads have stopped working. "
+    "Investigate the likely cause."
 )
 
-
-# ---------------------------------------------------------
-# Model now has enough information to answer
-# ---------------------------------------------------------
-
-print("\n--- FINAL ANSWER ---")
-print(final_response.output_text)
+print(answer)
