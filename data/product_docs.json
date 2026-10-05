@@ -1,0 +1,22 @@
+[
+  {
+    "document_id": "upload-guide",
+    "title": "File Upload Guide",
+    "content": "Customers can upload files through the web application and API.\n\nUploads are rejected when the current storage usage plus the incoming file size exceeds the account storage quota.\n\nWhen an upload is rejected because of storage capacity, the API returns HTTP 403 with the error code quota_limit."
+  },
+  {
+    "document_id": "storage-guide",
+    "title": "Storage Quotas",
+    "content": "Every customer account has a storage quota determined by its subscription plan.\n\nEnterprise customers can request additional storage capacity from support.\n\nRemoving old files immediately frees storage capacity for new uploads."
+  },
+  {
+    "document_id": "permissions-guide",
+    "title": "Upload Permissions",
+    "content": "Workspace administrators can disable file uploads for individual users.\n\nWhen uploads are disabled by an administrator, the API returns HTTP 403 with the error code upload_not_allowed."
+  },
+  {
+    "document_id": "file-limits",
+    "title": "File Size Limits",
+    "content": "Individual files must not exceed 5 GB.\n\nFiles larger than the maximum supported size are rejected with HTTP 413 payload_too_large."
+  }
+]
