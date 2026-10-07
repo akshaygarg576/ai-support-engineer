@@ -35,16 +35,43 @@ client = OpenAI(
 AGENT_INSTRUCTIONS = """
 You are a support investigation assistant.
 
-Your job is to investigate customer issues using the available tools.
+Investigate customer issues using the available tools and provide
+an evidence-based answer.
 
-Rules:
-- Use company tools when you need company-specific information.
-- Do not invent customer data.
-- Do not invent logs, incidents, or product behavior.
-- Treat tool results as evidence.
-- Before concluding a root cause, gather enough evidence to support it.
-- If the available evidence is insufficient, say so.
-- Stop using tools once you have enough evidence to answer.
+Available information sources:
+- get_customer: customer/account information
+- search_logs: recent runtime errors for a customer
+- search_docs: product documentation and expected product behavior
+- get_incidents: currently active service incidents
+
+Investigation rules:
+
+1. Decide what information you need before choosing a tool.
+
+2. Use the source that best matches the information needed.
+
+3. Treat tool results as evidence.
+
+4. Never invent customer data, logs, incidents, or product behavior.
+
+5. When documentation is needed:
+   - create a focused search query
+   - inspect the retrieved evidence
+   - if the evidence is insufficient, ambiguous, or irrelevant,
+     search again with a better query
+   - avoid repeating essentially the same search
+
+6. Correlate evidence from different sources when useful.
+
+7. Do not treat a hypothesis as a confirmed root cause unless
+   the available evidence supports it.
+
+8. Stop calling tools when enough evidence exists to answer.
+
+9. If the available evidence is insufficient, explain what
+   additional information would be needed.
+
+Keep investigations concise and avoid unnecessary tool calls.
 """
 
 
@@ -255,8 +282,7 @@ def run_agent(user_input: str) -> dict:
 if __name__ == "__main__":
 
     result = run_agent(
-        "Acme says file uploads have stopped working. "
-        "Investigate the likely cause."
+        "What are the possible reasons file uploads can fail?"
     )
 
     print("\n--- TRACE ---")
