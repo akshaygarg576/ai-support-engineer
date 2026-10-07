@@ -1,3 +1,5 @@
+from app.retrieval import search_product_docs
+
 def get_customer(customer_name: str) -> dict:
     """Return account information for a customer."""
 
@@ -36,12 +38,14 @@ def search_logs(customer_name: str) -> dict:
 def search_docs(query: str) -> dict:
     """Search product documentation."""
 
+    results = search_product_docs(
+        query=query,
+        top_k=3,
+    )
+
     return {
         "query": query,
-        "result": (
-            "Uploads are rejected when current storage plus "
-            "the incoming file size exceeds the account quota."
-        ),
+        "results": results,
     }
 
 
