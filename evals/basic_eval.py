@@ -1,9 +1,16 @@
+import json
+from pathlib import Path
+
 from app.agent import run_agent
 
-def evaluate_customer_plan_lookup():
-    result = run_agent(
-        "What plan is Acme on?"
-    )
+CASES_PATH = Path(__file__).parent / "cases.json"
+
+def load_cases() -> list[dict]:
+    with open(CASES_PATH, "r") as file:
+        return json.load(file)
+
+def evaluate_case(case: dict) -> dict:
+    result = run_agent(case["question"])
 
     answer = result["answer"].lower()
     trace = result["trace"]
@@ -13,54 +20,89 @@ def evaluate_customer_plan_lookup():
         for step in trace
     ]
 
-    print("\n--- EVAL TRACE ---")
-
-    for step in trace:
-        print(
-            f"Round {step['round']}: "
-            f"{step['tool']}({step['arguments']})"
-        )
-
-    print("\n--- EVAL RESULT ---")
-
-    # -----------------------------------------------------
-    # Check 1:
-    # Did the agent use the correct company data source?
-    # -----------------------------------------------------
-
-    used_customer_tool = "get_customer" in tools_used
-
-    # -----------------------------------------------------
-    # Check 2:
-    # Did the final answer contain the expected fact?
-    # -----------------------------------------------------
-
-    answer_is_correct = "enterprise" in answer
-
-    # -----------------------------------------------------
-    # Check 3:
-    # Did it avoid excessive tool usage?
-    # -----------------------------------------------------
-
-    efficient_enough = len(trace) <= 2
-
-    print("Used get_customer:", used_customer_tool)
-    print("Correct answer:", answer_is_correct)
-    print("Efficient enough:", efficient_enough)
-
-    passed = (
-        used_customer_tool
-        and answer_is_correct
-        and efficient_enough
+    # Did the agent use all expected tools?
+    tools_correct = all(
+        tool in tools_used
+        for tool in case["expected_tools"]
     )
 
-    print("\nPASSED:", passed)
+    # Does the answer contain expected facts?
+    answer_correct = all(
+        expected.lower() in answer
+        for expected in case["expected_answer_contains"]
+    )
 
-    return passed
+    # Did the agent avoid excessive work?
+    efficient = (
+        len(trace) <= case["max_tool_calls"]
+    )
+
+    passed = (
+        tools_correct
+        and answer_correct
+        and efficient
+    )
+
+    return {
+        "id": case["id"],
+        "passed": passed,
+        "tools_used": tools_used,
+        "tool_calls": len(trace),
+        "tools_correct": tools_correct,
+        "answer_correct": answer_correct,
+        "efficient": efficient,
+    }
+
+def main():
+    cases = load_cases()
+
+    results = [
+        evaluate_case(case)
+        for case in cases
+    ]
+
+    print("\n--- EVALUATION RESULTS ---")
+
+    for result in results:
+        status = (
+            "PASS"
+            if result["passed"]
+            else "FAIL"
+        )
+
+        print(
+            f"{status} | "
+            f"{result['id']} | "
+            f"tools={result['tools_used']} | "
+            f"calls={result['tool_calls']}"
+        )
+
+    passed_count = sum(
+        result["passed"]
+        for result in results
+    )
+
+    total_count = len(results)
+
+    pass_rate = (
+        passed_count / total_count
+        if total_count
+        else 0
+    )
+
+    print("\n--- SUMMARY ---")
+
+    print(
+        f"Passed: {passed_count}/{total_count}"
+    )
+
+    print(
+        f"Pass rate: {pass_rate:.1%}"
+    )
+
+    if passed_count != total_count:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
-    passed = evaluate_customer_plan_lookup()
-
-    if not passed:
-        raise SystemExit(1)
+    main()

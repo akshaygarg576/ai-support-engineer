@@ -1,0 +1,23 @@
+[
+  {
+    "id": "customer-plan",
+    "question": "What plan is Acme on?",
+    "expected_tools": ["get_customer"],
+    "expected_answer_contains": ["enterprise"],
+    "max_tool_calls": 2
+  },
+  {
+    "id": "file-size-limit",
+    "question": "What is the maximum supported file size?",
+    "expected_tools": ["search_docs"],
+    "expected_answer_contains": ["5 GB"],
+    "max_tool_calls": 2
+  },
+  {
+    "id": "active-incidents",
+    "question": "Are there any active service incidents?",
+    "expected_tools": ["get_incidents"],
+    "expected_answer_contains": [],
+    "max_tool_calls": 2
+  }
+]
